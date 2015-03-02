@@ -82,7 +82,7 @@ class Reader:
                 raise Reader.CorruptedPacketException()
             return p, payload
         except struct.error:
-            # The struct probably cannot be unpacked due to a corruptec
+            # The struct probably cannot be unpacked due to a corrupted
             # packet
             raise Reader.CorruptedPacketException()
 
@@ -143,9 +143,11 @@ class Reader:
 
     def set_leds(self, leds):
         self._check_atr()
-        head, payload = self._retransmit_wrapper(PacketId.SET_LED,
-                                                 bytes([leds]),
-                                                 ResponseLength.RESPONSE_ATR.value)
+        head, payload = self._retransmit_wrapper(
+            PacketId.SET_LED,
+            bytes([leds]),
+            ResponseLength.RESPONSE_ATR.value
+        )
         if head.id != PacketId.ACK.value:
             # The Reader did something it shouldn't have done; reset him
             raise Reader.ReaderError()
@@ -162,9 +164,11 @@ class Reader:
             payload += bytes([0x01])
         else:
             payload += bytes([0x00])
-        head, payload = self._retransmit_wrapper(PacketId.BEEP,
-                                                 payload,
-                                                 ResponseLength.RESPONSE_ATR.value)
+        head, payload = self._retransmit_wrapper(
+            PacketId.BEEP,
+            payload,
+            ResponseLength.RESPONSE_ATR.value
+        )
         if head.id != PacketId.ACK.value:
             # The Reader did something it shouldn't have done; reset him
             raise Reader.CorruptedPacketException()
@@ -173,9 +177,11 @@ class Reader:
         if len(payload) > Reader.MAX_RFID_PAYLOAD:
             raise ValueError("Cannot transmit more than 128 bytes at once")
         self._check_atr()
-        head, payload = self._retransmit_wrapper(PacketId.RFID_SEND,
-                                                 payload,
-                                                 len(payload) + ResponseLength.TRANSMIT_OVERHEAD.value)
+        head, payload = self._retransmit_wrapper(
+            PacketId.RFID_SEND,
+            payload,
+            len(payload) + ResponseLength.TRANSMIT_OVERHEAD.value
+        )
         if head.id != PacketId.RFID_SEND_COMPLETE.value:
             raise Reader.ReaderError()
         return payload
