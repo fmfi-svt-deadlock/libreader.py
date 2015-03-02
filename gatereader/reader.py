@@ -132,8 +132,8 @@ class Reader:
             try:
                 self._expect_packet(5)
             except serial.SerialTimeoutException:
+                # Now we are in serious trouble!
                 raise ReaderError()
-                pass
             raise ResetException()
 
     def set_leds(self, leds):
