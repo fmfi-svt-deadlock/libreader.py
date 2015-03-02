@@ -75,11 +75,16 @@ class Reader:
         return check != checksum
 
     def _expect_packet(self, length):
-        p, payload = self.PacketHead.unpack_from(self.port.read(length))
-        payload, checksum = payload[:-1], payload[-1]
-        if self._checksum_mismatch(p, payload, checksum):
+        try:
+            p, payload = self.PacketHead.unpack_from(self.port.read(length))
+            payload, checksum = payload[:-1], payload[-1]
+            if self._checksum_mismatch(p, payload, checksum):
+                raise Reader.CorruptedPacketException()
+            return p, payload
+        except struct.error:
+            # The struct probably cannot be unpacked due to a corruptec
+            # packet
             raise Reader.CorruptedPacketException()
-        return p, payload
 
     def _retransmit_wrapper(self, packet_id, payload, resp_length):
         """Transmits the packet, receives response while handling Rx errors.
@@ -103,7 +108,7 @@ class Reader:
                     serial.SerialTimeoutException):
                 # Corrupted response to our request, request retransmission
                 for j in range(0, 2):
-                    self._transmit_packet(PacketId.RX_ERROR, [])
+                    self._transmit_packet(PacketId.RX_ERROR, bytes())
                     try:
                         p, payload = self._expect_packet(resp_length)
                         if p.id == PacketId.RX_ERROR:
