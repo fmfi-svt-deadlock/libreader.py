@@ -21,6 +21,7 @@ class PacketId(Enum):
     RX_ERROR              = 0xFF
 
 class ResponseLength(Enum):
+    RESPONSE_ACK          = 5
     RESPONSE_ATR          = 5
     TRANSMIT_OVERHEAD     = 3
 
@@ -127,14 +128,14 @@ class Reader:
         raise ReaderError()
 
     def _check_atr(self):
-        if self.port.inWaiting() == 5:
+        # HACK ALERT: We must release sooner than we are ready.
+        # This listens for ACK instead of the ATR as the preliminary
+        # version does not have a bootloader
+        if self.port.inWaiting() == ResponseLength.RESPONSE_ACK.value:
             # Trouble is waiting for us in the buffer; there should be
             # nothing there
-            # HACK ALERT: We must release sooner than we are ready.
-            # This listens for ACK instead of the ATR as the preliminary
-            # version does not have a bootloader
             try:
-                self._expect_packet(5)
+                self._expect_packet(ResponseLength.RESPONSE_ACK.value)
             except serial.SerialTimeoutException:
                 # Now we are in serious trouble!
                 raise ReaderError()
@@ -145,7 +146,7 @@ class Reader:
         head, payload = self._transceive_with_retry(
             PacketId.SET_LED,
             bytes([leds]),
-            ResponseLength.RESPONSE_ATR.value
+            ResponseLength.RESPONSE_ACK.value
         )
         if head.id != PacketId.ACK.value:
             # The Reader did something it shouldn't have done; reset him
@@ -153,7 +154,8 @@ class Reader:
 
     def beep(self, tones, repeat=False):
         if len(tones) > Reader.MAX_BEEP_LENGTH:
-            raise ValueError("Cannot beep more than 8 times in one command")
+            raise ValueError("Cannot beep more than {} times in one command"
+                             .format(Reader.MAX_BEEP_LENGTH))
         payload = bytearray()
         for tone in tones:
             payload += struct.pack(STRUCT_FORMAT + 'HH', tone[0], tone[1])
@@ -161,7 +163,7 @@ class Reader:
         head, payload = self._transceive_with_retry(
             PacketId.BEEP,
             payload,
-            ResponseLength.RESPONSE_ATR.value
+            ResponseLength.RESPONSE_ACK.value
         )
         if head.id != PacketId.ACK.value:
             # The Reader did something it shouldn't have done; reset him
@@ -169,7 +171,8 @@ class Reader:
 
     def RFID_send(self, payload):
         if len(payload) > Reader.MAX_RFID_PAYLOAD:
-            raise ValueError("Cannot transmit more than 128 bytes at once")
+            raise ValueError("Cannot transmit more than {} bytes at once"
+                             .format(Reader.MAX_RFID_PAYLOAD))
         head, payload = self._transceive_with_retry(
             PacketId.RFID_SEND,
             payload,
