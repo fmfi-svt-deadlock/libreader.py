@@ -24,19 +24,18 @@ class ResponseLength(Enum):
     RESPONSE_ATR          = 5
     TRANSMIT_OVERHEAD     = 3
 
-class Reader:
-
-    class ResetException(Exception):
+class ResetException(Exception):
         """The reader has been unexpectedly reset."""
         pass
 
-    class ReaderError(Exception):
-        """The reader did something wrong and MUST be reset."""
-        pass
+class ReaderError(Exception):
+    """The reader did something wrong and MUST be reset."""
+    pass
 
-    class CorruptedPacketException(Exception):
-        pass
+class CorruptedPacketException(Exception):
+    pass
 
+class Reader:
     class Leds(Enum):
         RED_LED     = 0
         GREEN_LED   = 1
@@ -67,26 +66,26 @@ class Reader:
         self.port.write(bytes([packet_id.value, len(payload)]) + payload
                         + bytes([checksum]))
 
-    def _checksum_mismatch(self, head, payload, checksum):
+    def _checksum_ok(self, head, payload, checksum):
         check =  head.id
         check ^= head.length
         for byte in payload:
             check ^= byte
-        return check != checksum
+        return check == checksum
 
     def _expect_packet(self, length):
         try:
             p, payload = self.PacketHead.unpack_from(self.port.read(length))
-            payload, checksum = payload[:-1], payload[-1]
-            if self._checksum_mismatch(p, payload, checksum):
-                raise Reader.CorruptedPacketException()
-            return p, payload
-        except struct.error:
+        except struct.error as e:
             # The struct probably cannot be unpacked due to a corrupted
             # packet
-            raise Reader.CorruptedPacketException()
+            raise CorruptedPacketException() from e
+        payload, checksum = payload[:-1], payload[-1]
+        if not self._checksum_ok(p, payload, checksum):
+            raise CorruptedPacketException()
+        return p, payload
 
-    def _retransmit_wrapper(self, packet_id, payload, resp_length):
+    def _transceive_with_retry(self, packet_id, payload, resp_length):
         """Transmits the packet, receives response while handling Rx errors.
 
         Attempts to transmit the packet, retransmitting it up to 2 times
@@ -95,6 +94,7 @@ class Reader:
         If the response is corrupted, it transmits RxError up to 2 times.
         If this proces fails, this function raises ReaderError.
         """
+        self._check_atr()
         for i in range(0, 2):
             try:
                 self._transmit_packet(packet_id, payload)
@@ -104,28 +104,27 @@ class Reader:
                     pass
                 else:
                     return (p, payload)
-            except (Reader.CorruptedPacketException,
-                    serial.SerialTimeoutException):
+            except (CorruptedPacketException, serial.SerialTimeoutException):
                 # Corrupted response to our request, request retransmission
                 for j in range(0, 2):
-                    self._transmit_packet(PacketId.RX_ERROR, bytes())
+                    self._transmit_packet(PacketId.RX_ERROR, b'')
                     try:
                         p, payload = self._expect_packet(resp_length)
                         if p.id == PacketId.RX_ERROR:
                             # RxError was a response to our RxError. This
-                            # behaviour is unacceptible, let's punish the
+                            # behaviour is unacceptable, let's punish the
                             # reader by resetting it!
-                            raise Reader.ReaderError()
+                            raise ReaderError()
                         else:
                             return (p, payload)
-                    except (Reader.CorruptedPacketException,
+                    except (CorruptedPacketException,
                             serial.SerialTimeoutException):
                         # Again, corrupted response. Retry
                         pass
         # If we got here, we've had 3 consectutive failed receive
         # attempts. Reader, how dare you! We will reset him for doing
         # this to us!
-        raise Reader.ReaderError()
+        raise ReaderError()
 
     def _check_atr(self):
         if self.port.inWaiting() == 5:
@@ -142,46 +141,40 @@ class Reader:
             raise ResetException()
 
     def set_leds(self, leds):
-        self._check_atr()
-        head, payload = self._retransmit_wrapper(
+        """Sets status of the leds according to the `leds` bitmask"""
+        head, payload = self._transceive_with_retry(
             PacketId.SET_LED,
             bytes([leds]),
             ResponseLength.RESPONSE_ATR.value
         )
         if head.id != PacketId.ACK.value:
             # The Reader did something it shouldn't have done; reset him
-            raise Reader.ReaderError()
+            raise ReaderError()
 
     def beep(self, tones, repeat=False):
         if len(tones) > Reader.MAX_BEEP_LENGTH:
             raise ValueError("Cannot beep more than 8 times in one command")
-        self._check_atr()
-        payload = bytearray(0)
+        payload = bytearray()
         for tone in tones:
-            payload += struct.pack(STRUCT_FORMAT + 'H', tone[0])
-            payload += struct.pack(STRUCT_FORMAT + 'H', tone[1])
-        if repeat:
-            payload += bytes([0x01])
-        else:
-            payload += bytes([0x00])
-        head, payload = self._retransmit_wrapper(
+            payload += struct.pack(STRUCT_FORMAT + 'HH', tone[0], tone[1])
+        payload += bytes([0x01 if repeat else 0x00])
+        head, payload = self._transceive_with_retry(
             PacketId.BEEP,
             payload,
             ResponseLength.RESPONSE_ATR.value
         )
         if head.id != PacketId.ACK.value:
             # The Reader did something it shouldn't have done; reset him
-            raise Reader.CorruptedPacketException()
+            raise CorruptedPacketException()
 
     def RFID_send(self, payload):
         if len(payload) > Reader.MAX_RFID_PAYLOAD:
             raise ValueError("Cannot transmit more than 128 bytes at once")
-        self._check_atr()
-        head, payload = self._retransmit_wrapper(
+        head, payload = self._transceive_with_retry(
             PacketId.RFID_SEND,
             payload,
             len(payload) + ResponseLength.TRANSMIT_OVERHEAD.value
         )
         if head.id != PacketId.RFID_SEND_COMPLETE.value:
-            raise Reader.ReaderError()
+            raise ReaderError()
         return payload
